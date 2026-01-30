@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import subprocess
+import re
 from datetime import datetime
 from enum import Enum
 from typing import List, Optional, Dict
@@ -57,6 +58,17 @@ class Task:
         return cls(**data)
 
 
+def validate_id(id_str: str, name: str = "ID") -> bool:
+    """Validate that an ID contains only safe characters"""
+    if not id_str:
+        print(f"Error: {name} cannot be empty")
+        return False
+    if not re.match(r'^[a-zA-Z0-9_-]+$', id_str):
+        print(f"Error: {name} '{id_str}' contains invalid characters. Use only letters, numbers, underscores, and hyphens.")
+        return False
+    return True
+
+
 @dataclass
 class Message:
     """Represents a message in the system"""
@@ -95,29 +107,51 @@ class StateManager:
     
     def save_tasks(self, tasks: Dict[str, Task]):
         """Save tasks to file"""
-        with open(self.tasks_file, 'w') as f:
-            json.dump({k: v.to_dict() for k, v in tasks.items()}, f, indent=2)
+        try:
+            with open(self.tasks_file, 'w') as f:
+                json.dump({k: v.to_dict() for k, v in tasks.items()}, f, indent=2)
+        except (IOError, OSError) as e:
+            print(f"Error saving tasks: {e}")
+            raise
     
     def load_tasks(self) -> Dict[str, Task]:
         """Load tasks from file"""
         if not os.path.exists(self.tasks_file):
             return {}
-        with open(self.tasks_file, 'r') as f:
-            data = json.load(f)
-            return {k: Task.from_dict(v) for k, v in data.items()}
+        try:
+            with open(self.tasks_file, 'r') as f:
+                data = json.load(f)
+                return {k: Task.from_dict(v) for k, v in data.items()}
+        except json.JSONDecodeError as e:
+            print(f"Error: Corrupted tasks file. {e}")
+            return {}
+        except (IOError, OSError) as e:
+            print(f"Error loading tasks: {e}")
+            return {}
     
     def save_messages(self, messages: List[Message]):
         """Save messages to file"""
-        with open(self.messages_file, 'w') as f:
-            json.dump([m.to_dict() for m in messages], f, indent=2)
+        try:
+            with open(self.messages_file, 'w') as f:
+                json.dump([m.to_dict() for m in messages], f, indent=2)
+        except (IOError, OSError) as e:
+            print(f"Error saving messages: {e}")
+            raise
     
     def load_messages(self) -> List[Message]:
         """Load messages from file"""
         if not os.path.exists(self.messages_file):
             return []
-        with open(self.messages_file, 'r') as f:
-            data = json.load(f)
-            return [Message.from_dict(m) for m in data]
+        try:
+            with open(self.messages_file, 'r') as f:
+                data = json.load(f)
+                return [Message.from_dict(m) for m in data]
+        except json.JSONDecodeError as e:
+            print(f"Error: Corrupted messages file. {e}")
+            return []
+        except (IOError, OSError) as e:
+            print(f"Error loading messages: {e}")
+            return []
     
     def append_message(self, message: Message):
         """Append a message to the message log"""
@@ -127,15 +161,26 @@ class StateManager:
     
     def save_groups(self, groups: Dict[str, dict]):
         """Save group information"""
-        with open(self.groups_file, 'w') as f:
-            json.dump(groups, f, indent=2)
+        try:
+            with open(self.groups_file, 'w') as f:
+                json.dump(groups, f, indent=2)
+        except (IOError, OSError) as e:
+            print(f"Error saving groups: {e}")
+            raise
     
     def load_groups(self) -> Dict[str, dict]:
         """Load group information"""
         if not os.path.exists(self.groups_file):
             return {}
-        with open(self.groups_file, 'r') as f:
-            return json.load(f)
+        try:
+            with open(self.groups_file, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError as e:
+            print(f"Error: Corrupted groups file. {e}")
+            return {}
+        except (IOError, OSError) as e:
+            print(f"Error loading groups: {e}")
+            return {}
     
     def get_log_file(self, agent_name: str) -> str:
         """Get log file path for an agent"""
@@ -202,6 +247,10 @@ class TechDirector:
     
     def create_task(self, task_id: str, title: str, description: str, dependencies: List[str] = None):
         """Create a new task"""
+        # Validate task ID
+        if not validate_id(task_id, "Task ID"):
+            return False
+        
         if task_id in self.tasks:
             print(f"Error: Task {task_id} already exists")
             return False
@@ -227,6 +276,10 @@ class TechDirector:
     
     def assign_task(self, task_id: str, group_name: str):
         """Assign a task to a group"""
+        # Validate group name
+        if not validate_id(group_name, "Group name"):
+            return False
+        
         if task_id not in self.tasks:
             print(f"Error: Task {task_id} does not exist")
             return False
@@ -269,6 +322,16 @@ class TechDirector:
             return False
         
         task = self.tasks[task_id]
+        
+        # Validate task state
+        if task.status == TaskStatus.COMPLETED:
+            print(f"Warning: Task {task_id} is already completed")
+            return True
+        
+        if task.status == TaskStatus.BLOCKED:
+            print(f"Error: Cannot complete task {task_id} - it is blocked by dependencies")
+            return False
+        
         task.status = TaskStatus.COMPLETED
         task.completed_at = datetime.now().isoformat()
         self.state.save_tasks(self.tasks)
@@ -366,6 +429,10 @@ class Group:
     """Group - executes tasks assigned by TD"""
     
     def __init__(self, name: str, state_dir=".agent_swarm"):
+        # Validate group name
+        if not validate_id(name, "Group name"):
+            raise ValueError(f"Invalid group name: {name}")
+        
         self.name = name
         self.state = StateManager(state_dir)
         self.tmux = TmuxManager()
@@ -435,6 +502,15 @@ class Group:
         task = tasks[task_id]
         if task.assigned_to != self.name:
             print(f"Error: Task {task_id} is not assigned to {self.name}")
+            return False
+        
+        # Validate task state
+        if task.status == TaskStatus.COMPLETED:
+            print(f"Warning: Task {task_id} is already completed")
+            return True
+        
+        if task.status == TaskStatus.BLOCKED:
+            print(f"Error: Cannot complete task {task_id} - it is blocked by dependencies")
             return False
         
         task.status = TaskStatus.COMPLETED
