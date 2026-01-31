@@ -71,6 +71,7 @@ function createUI() {
     let suggestionItems = [];
     let suggestionIndex = 0;
     let suggestionMode = null;
+    let ignoreNextEnter = false; // Prevent double-fire when switching modes
 
     const screen = blessed.screen({
         smartCSR: true,
@@ -421,6 +422,12 @@ function createUI() {
                     : suggestionIndex + 1;
                 updateSuggestions();
             } else if (key.name === 'enter' || key.name === 'return') {
+                // Prevent double-fire when switching modes
+                if (ignoreNextEnter) {
+                    ignoreNextEnter = false;
+                    screen.render();
+                    return;
+                }
                 const selected = suggestionItems[suggestionIndex]?.split(' ')[0];
                 if (selected) {
                     if (suggestionMode === '@') {
@@ -440,8 +447,12 @@ function createUI() {
                     } else if (suggestionMode === '/') {
                         if (selected === 'p') {
                             // Switch to project selection mode
+                            ignoreNextEnter = true; // Prevent double-fire
                             inputValue = '/p ';
                             showSuggestions('project');
+                            updateInput();
+                            screen.render();
+                            return;
                         } else {
                             handleCommand(selected);
                             inputValue = '';
