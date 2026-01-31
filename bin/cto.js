@@ -82,11 +82,11 @@ if (!cli || !projectId || !role) {
 
 // CLI mapping: cc = proxy + claude, cc-d = direct claude
 const cliMap = {
-    'claude': { cmd: 'claude', proxy: false },
-    'codex': { cmd: 'codex', proxy: false },
-    'gemini': { cmd: 'gemini', proxy: false },
-    'cc': { cmd: 'claude --dangerously-skip-permissions', proxy: true },
-    'cc-d': { cmd: 'claude --dangerously-skip-permissions', proxy: false }
+    'claude': { base: 'claude', flags: '', proxy: false },
+    'codex': { base: 'codex', flags: '', proxy: false },
+    'gemini': { base: 'gemini', flags: '', proxy: false },
+    'cc': { base: 'claude', flags: '--dangerously-skip-permissions', proxy: true },
+    'cc-d': { base: 'claude', flags: '--dangerously-skip-permissions', proxy: false }
 };
 const validCLIs = Object.keys(cliMap);
 if (!validCLIs.includes(cli)) {
@@ -94,7 +94,8 @@ if (!validCLIs.includes(cli)) {
     process.exit(1);
 }
 const cliConfig = cliMap[cli];
-const actualCli = cliConfig.cmd;
+const baseCli = cliConfig.base;
+const cliFlags = cliConfig.flags;
 const needsProxy = cliConfig.proxy;
 const isCodex = cli === 'codex';
 
@@ -176,9 +177,10 @@ if (sessionExists) {
     const scriptFile = path.join(tmpDir, `${sessionName}-start.sh`);
     // Build script with optional proxy and CLI-specific args
     const proxySetup = needsProxy ? 'source ./spxy.sh on 2>/dev/null || true\n' : '';
+    const flagsSuffix = cliFlags ? ` ${cliFlags}` : '';
     const scriptContent = isCodex
-        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${actualCli} "$(cat '${promptFile}')"\nexec bash`
-        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${actualCli} --system-prompt "$(cat '${promptFile}')"\nexec bash`;
+        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} "$(cat '${promptFile}')"${flagsSuffix}\nexec bash`
+        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} --system-prompt "$(cat '${promptFile}')"${flagsSuffix}\nexec bash`;
     fs.writeFileSync(scriptFile, scriptContent);
     fs.chmodSync(scriptFile, '755');
     try {
