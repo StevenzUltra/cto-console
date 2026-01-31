@@ -45,16 +45,16 @@ function getProject(name) {
 function sendToSession(sessionName, message) {
     if (!sessionName) return false;
     try {
+        // Escape for shell, preserve newlines using $'...' syntax
         const escaped = message
             .replace(/\\/g, '\\\\')
-            .replace(/"/g, '\\"')
-            .replace(/\$/g, '\\$')
-            .replace(/`/g, '\\`')
-            .replace(/!/g, '\\!')
-            .replace(/\n/g, ' ');
-        execSync(`tmux send-keys -t "${sessionName}" "[CTO] ${escaped}"`, { stdio: 'ignore' });
-        execSync('sleep 0.1', { stdio: 'ignore' });
-        execSync(`tmux send-keys -t "${sessionName}" Enter`, { stdio: 'ignore' });
+            .replace(/'/g, "'\\''")
+            .replace(/\n/g, '\\n');
+        // Use -l for literal mode, $'...' for escape sequences
+        execSync(`tmux send-keys -t "${sessionName}" -l $'[CTO] ${escaped}'`, { stdio: 'ignore' });
+        execSync('sleep 0.2', { stdio: 'ignore' });
+        // Send Enter key to submit the message
+        execSync(`tmux send-keys -t "${sessionName}" C-m`, { stdio: 'ignore' });
         return true;
     } catch { return false; }
 }
@@ -72,7 +72,8 @@ function createUI() {
     let suggestionItems = [];
     let suggestionIndex = 0;
     let suggestionMode = null;
-    let ignoreNextEnter = false; // Prevent double-fire when switching modes
+    let lastEnterTime = 0; // Debounce enter key (blessed fires twice)
+    let atTriggerPos = -1; // Position where @ was typed (for inline @mentions)
 
     // Command history
     const commandHistory = [];
@@ -195,11 +196,19 @@ function createUI() {
         // Build display with cursor
         const before = inputValue.slice(0, cursorPos);
         const after = inputValue.slice(cursorPos);
-        const cursorChar = after.length > 0 ? after[0] : ' ';
-        const rest = after.slice(1);
+        let cursorChar = after.length > 0 ? after[0] : ' ';
+        let rest = after.slice(1);
+
+        // Handle cursor on newline: show visible marker + preserve newline
+        let cursorDisplay;
+        if (cursorChar === '\n') {
+            cursorDisplay = `{green-bg}{black-fg} {/black-fg}{/green-bg}\n`;
+        } else {
+            cursorDisplay = `{green-bg}{black-fg}${cursorChar}{/black-fg}{/green-bg}`;
+        }
 
         // Show cursor as inverted char
-        inputBox.setContent(` ${before}{green-bg}{black-fg}${cursorChar}{/black-fg}{/green-bg}${rest}`);
+        inputBox.setContent(` ${before}${cursorDisplay}${rest}`);
 
         // Calculate needed height based on content lines
         const lines = inputValue.split('\n');
@@ -475,21 +484,40 @@ function createUI() {
                     : suggestionIndex + 1;
                 updateSuggestions();
             } else if (key.name === 'enter' || key.name === 'return') {
-                // Prevent double-fire when switching modes
-                if (ignoreNextEnter) {
-                    ignoreNextEnter = false;
-                    screen.render();
-                    return;
+                // Debounce: blessed fires enter twice sometimes
+                const now = Date.now();
+                if (now - lastEnterTime < 100) {
+                    return; // Ignore duplicate enter within 100ms
                 }
+                lastEnterTime = now;
+
                 const selected = suggestionItems[suggestionIndex]?.split(' ')[0];
                 if (selected) {
                     if (suggestionMode === '@') {
-                        currentTarget = selected;
-                        addLog(`{gray-fg}Target: @${currentTarget}{/gray-fg}`);
-                        updateStatus();
-                        inputValue = '';
-                        cursorPos = 0;
+                        // Check if this is inline @ (has content before @) or standalone @
+                        const isInlineAt = atTriggerPos > 0;
+
+                        if (isInlineAt) {
+                            // Inline @mention: replace @... with @target + space, keep other content
+                            const before = inputValue.slice(0, atTriggerPos);
+                            const after = inputValue.slice(cursorPos);
+                            const mention = `@${selected} `;
+                            inputValue = before + mention + after;
+                            cursorPos = before.length + mention.length;
+                        } else {
+                            // Started with @ only: set as default target and clear input
+                            currentTarget = selected;
+                            addLog(`{gray-fg}Target: @${currentTarget}{/gray-fg}`);
+                            updateStatus();
+                            inputValue = '';
+                            cursorPos = 0;
+                        }
+                        atTriggerPos = -1;
+                        suggestionMode = null;
                         hideSuggestions();
+                        updateInput();
+                        screen.render();
+                        return; // Exit immediately - do NOT process as submit
                     } else if (suggestionMode === 'project') {
                         // Select project
                         currentProject = getProject(selected);
@@ -593,6 +621,13 @@ function createUI() {
 
         // Enter = submit
         if (key.name === 'enter' || key.name === 'return') {
+            // Debounce: blessed fires enter twice sometimes
+            const now = Date.now();
+            if (now - lastEnterTime < 100) {
+                return; // Ignore duplicate enter within 100ms
+            }
+            lastEnterTime = now;
+
             // Save to history before submitting
             if (inputValue.trim()) {
                 commandHistory.unshift(inputValue);
@@ -606,29 +641,66 @@ function createUI() {
             return;
         }
 
-        // History navigation (Up/Down without suggestions)
-        if (key.name === 'up' && commandHistory.length > 0) {
-            if (historyIndex === -1) savedInput = inputValue;
-            if (historyIndex < commandHistory.length - 1) {
-                historyIndex++;
-                inputValue = commandHistory[historyIndex];
-                cursorPos = inputValue.length;
-                updateInput();
+        // Up/Down: multiline cursor movement or history navigation
+        if (key.name === 'up') {
+            const hasMultipleLines = inputValue.includes('\n');
+            if (hasMultipleLines) {
+                // Move cursor up one line
+                const before = inputValue.slice(0, cursorPos);
+                const lastNewline = before.lastIndexOf('\n');
+                if (lastNewline >= 0) {
+                    // Find column position
+                    const col = cursorPos - lastNewline - 1;
+                    // Find previous line start
+                    const prevNewline = before.lastIndexOf('\n', lastNewline - 1);
+                    const prevLineStart = prevNewline + 1;
+                    const prevLineLen = lastNewline - prevLineStart;
+                    cursorPos = prevLineStart + Math.min(col, prevLineLen);
+                    updateInput();
+                }
+            } else if (commandHistory.length > 0) {
+                // Single line: history navigation
+                if (historyIndex === -1) savedInput = inputValue;
+                if (historyIndex < commandHistory.length - 1) {
+                    historyIndex++;
+                    inputValue = commandHistory[historyIndex];
+                    cursorPos = inputValue.length;
+                    updateInput();
+                }
             }
             screen.render();
             return;
         }
         if (key.name === 'down') {
-            if (historyIndex > 0) {
-                historyIndex--;
-                inputValue = commandHistory[historyIndex];
-                cursorPos = inputValue.length;
-            } else if (historyIndex === 0) {
-                historyIndex = -1;
-                inputValue = savedInput;
-                cursorPos = inputValue.length;
+            const hasMultipleLines = inputValue.includes('\n');
+            if (hasMultipleLines) {
+                // Move cursor down one line
+                const nextNewline = inputValue.indexOf('\n', cursorPos);
+                if (nextNewline >= 0) {
+                    // Find column position
+                    const before = inputValue.slice(0, cursorPos);
+                    const lastNewline = before.lastIndexOf('\n');
+                    const col = cursorPos - lastNewline - 1;
+                    // Find next line
+                    const nextLineStart = nextNewline + 1;
+                    const nextNextNewline = inputValue.indexOf('\n', nextLineStart);
+                    const nextLineLen = (nextNextNewline >= 0 ? nextNextNewline : inputValue.length) - nextLineStart;
+                    cursorPos = nextLineStart + Math.min(col, nextLineLen);
+                    updateInput();
+                }
+            } else {
+                // Single line: history navigation
+                if (historyIndex > 0) {
+                    historyIndex--;
+                    inputValue = commandHistory[historyIndex];
+                    cursorPos = inputValue.length;
+                } else if (historyIndex === 0) {
+                    historyIndex = -1;
+                    inputValue = savedInput;
+                    cursorPos = inputValue.length;
+                }
+                updateInput();
             }
-            updateInput();
             screen.render();
             return;
         }
@@ -737,9 +809,15 @@ function createUI() {
             cursorPos++;
             updateInput();
             // Auto-show suggestions
-            if (inputValue === '@') showSuggestions('@');
-            else if (inputValue === '/') showSuggestions('/');
-            else if (inputValue === '/p ' || inputValue === '/p') showSuggestions('project');
+            if (ch === '@') {
+                // @ can be triggered anywhere in the input
+                atTriggerPos = cursorPos - 1; // Position of @
+                showSuggestions('@');
+            } else if (inputValue === '/') {
+                showSuggestions('/');
+            } else if (inputValue === '/p ' || inputValue === '/p') {
+                showSuggestions('project');
+            }
         }
         screen.render();
     });
