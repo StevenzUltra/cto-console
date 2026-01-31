@@ -4,7 +4,8 @@
   "description": "CTO Console - Multi AI Agent Collaboration Tool, manage Claude/Codex/Gemini teams via tmux",
   "main": "lib/project.js",
   "bin": {
-    "cto": "./bin/cto.js"
+    "cto": "./bin/cto.js",
+    "at-cto": "./bin/at-cto.js"
   },
   "dependencies": {
     "blessed": "^0.1.81",
