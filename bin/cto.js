@@ -173,16 +173,59 @@ if (sessionExists) {
 } else {
     console.log(`${c.cyan}Starting ${cli} - Project ${projectId} ${role}${c.reset}`);
     const scriptFile = path.join(tmpDir, `${sessionName}-start.sh`);
-    // Build script with optional proxy and CLI-specific args
+    const promptFile = path.join(tmpDir, `${sessionName}-prompt.txt`);
+
+    // Build script: proxy setup -> start CLI
     const proxySetup = needsProxy ? 'source ./spxy.sh on 2>/dev/null || true\n' : '';
     const flagsSuffix = cliFlags ? ` ${cliFlags}` : '';
-    // Escape prompt for bash heredoc (escape backslashes and single quotes)
-    const escapedPrompt = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
-    const scriptContent = isCodex
-        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} '${escapedPrompt}'${flagsSuffix}\nexec bash`
-        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} --system-prompt '${escapedPrompt}'${flagsSuffix}\nexec bash`;
+
+    // Escape prompt for shell (escape single quotes)
+    const escapedPrompt = prompt.replace(/'/g, "'\\''");
+
+    // Different scripts for Codex vs Claude
+    let scriptContent;
+    if (isCodex) {
+        // Codex: pass prompt from file to handle multi-line content safely
+        scriptContent = `#!/bin/bash
+export SWARM_PROJECT="${projectName}"
+export SWARM_ROLE="${role}"
+
+# Read prompt from file (handles multi-line safely)
+PROMPT=\$(cat "${promptFile}")
+rm -f "${promptFile}"
+
+${baseCli} "\$PROMPT"
+exec bash`;
+    } else {
+        // Claude/cc/cc-d: use send-keys to inject prompt after CLI starts
+        scriptContent = `#!/bin/bash
+# 1. Set environment variables first
+export CLAUDE_CODE_TASK_LIST_ID="${projectName}"
+export SWARM_PROJECT="${projectName}"
+export SWARM_ROLE="${role}"
+
+# 2. Setup proxy (if needed)
+${proxySetup}
+# 3. Background injector: wait for CLI, then send prompt
+(
+    sleep 6
+    if [ -f "${promptFile}" ]; then
+        tmux send-keys -t "${sessionName}" "$(cat '${promptFile}')"
+        sleep 1
+        tmux send-keys -t "${sessionName}" Enter
+        rm -f "${promptFile}"
+    fi
+) &
+
+# 4. Start CLI in foreground
+${baseCli}${flagsSuffix}
+exec bash`;
+    }
+
     fs.writeFileSync(scriptFile, scriptContent);
     fs.chmodSync(scriptFile, '755');
+    fs.writeFileSync(promptFile, prompt);
+
     try {
         execSync(`tmux new-session -d -s "${sessionName}" "bash '${scriptFile}'"`);
         spawnSync('tmux', ['attach', '-t', sessionName], { stdio: 'inherit' });

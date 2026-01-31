@@ -153,13 +153,16 @@ function createUI() {
         tags: true
     });
 
-    // Suggestion box (expands below input, at bottom)
+    // Suggestion box (expands below input, at bottom) - max 5 visible items
+    const MAX_VISIBLE_SUGGESTIONS = 5;
+    let suggestionScrollOffset = 0;
+
     const suggestionBox = blessed.box({
         parent: screen,
         bottom: 0,
         left: 1,
         width: '100%-2',
-        height: 4,
+        height: 7, // 5 items + 2 border
         border: { type: 'line', fg: 'green' },
         style: { fg: 'white', bg: 'black', border: { fg: 'green' } },
         tags: true,
@@ -179,14 +182,45 @@ function createUI() {
         }
         suggestionBox.show();
         statusBar.hide();  // Hide status bar to make room for suggestions
-        const lines = suggestionItems.map((item, i) => {
-            const prefix = i === suggestionIndex ? '{green-fg}▶{/green-fg}' : ' ';
-            const style = i === suggestionIndex ? '{green-fg}' : '{white-fg}';
-            return ` ${prefix} ${style}${item}{/${i === suggestionIndex ? 'green' : 'white'}-fg}`;
+
+        // Adjust scroll offset to keep selected item visible
+        if (suggestionIndex < suggestionScrollOffset) {
+            suggestionScrollOffset = suggestionIndex;
+        } else if (suggestionIndex >= suggestionScrollOffset + MAX_VISIBLE_SUGGESTIONS) {
+            suggestionScrollOffset = suggestionIndex - MAX_VISIBLE_SUGGESTIONS + 1;
+        }
+
+        // Get visible items only
+        const visibleItems = suggestionItems.slice(
+            suggestionScrollOffset,
+            suggestionScrollOffset + MAX_VISIBLE_SUGGESTIONS
+        );
+
+        const lines = visibleItems.map((item, i) => {
+            const actualIndex = i + suggestionScrollOffset;
+            const prefix = actualIndex === suggestionIndex ? '{green-fg}▶{/green-fg}' : ' ';
+            const style = actualIndex === suggestionIndex ? '{green-fg}' : '{white-fg}';
+            return ` ${prefix} ${style}${item}{/${actualIndex === suggestionIndex ? 'green' : 'white'}-fg}`;
         });
+
+        // Add scroll indicators if needed
+        const hasMore = suggestionItems.length > MAX_VISIBLE_SUGGESTIONS;
+        const canScrollUp = suggestionScrollOffset > 0;
+        const canScrollDown = suggestionScrollOffset + MAX_VISIBLE_SUGGESTIONS < suggestionItems.length;
+
         suggestionBox.setContent(lines.join('\n'));
         const labels = { '@': ' Select Target ', '/': ' Commands ', 'project': ' Select Project ' };
-        suggestionBox.setLabel(labels[suggestionMode] || ' Options ');
+        let label = labels[suggestionMode] || ' Options ';
+        if (hasMore) {
+            label += ` (${suggestionIndex + 1}/${suggestionItems.length})`;
+            if (canScrollUp) label = '▲ ' + label;
+            if (canScrollDown) label = label + ' ▼';
+        }
+        suggestionBox.setLabel(label);
+
+        // Adjust box height dynamically
+        const boxHeight = Math.min(suggestionItems.length, MAX_VISIBLE_SUGGESTIONS) + 2;
+        suggestionBox.height = boxHeight;
     }
 
     // Full suggestion list
@@ -217,6 +251,7 @@ function createUI() {
         if (!q) {
             suggestionItems = [...allSuggestionItems];
             suggestionIndex = 0;
+            suggestionScrollOffset = 0;
             return;
         }
 
@@ -249,6 +284,7 @@ function createUI() {
             suggestionItems = [...allSuggestionItems]; // 无匹配时显示全部
         }
         suggestionIndex = 0;
+        suggestionScrollOffset = 0;
     }
 
     function showSuggestions(mode) {
@@ -256,6 +292,7 @@ function createUI() {
         allSuggestionItems = getFullSuggestions(mode);
         suggestionItems = [...allSuggestionItems];
         suggestionIndex = 0;
+        suggestionScrollOffset = 0;
         suggestionVisible = true;
         updateSuggestions();
         screen.render();
@@ -366,12 +403,16 @@ function createUI() {
         }
 
         if (suggestionVisible) {
-            // Suggestion mode
+            // Suggestion mode with circular navigation
             if (key.name === 'up') {
-                suggestionIndex = Math.max(0, suggestionIndex - 1);
+                suggestionIndex = suggestionIndex <= 0
+                    ? suggestionItems.length - 1  // Wrap to bottom
+                    : suggestionIndex - 1;
                 updateSuggestions();
             } else if (key.name === 'down') {
-                suggestionIndex = Math.min(suggestionItems.length - 1, suggestionIndex + 1);
+                suggestionIndex = suggestionIndex >= suggestionItems.length - 1
+                    ? 0  // Wrap to top
+                    : suggestionIndex + 1;
                 updateSuggestions();
             } else if (key.name === 'enter' || key.name === 'return') {
                 const selected = suggestionItems[suggestionIndex]?.split(' ')[0];
