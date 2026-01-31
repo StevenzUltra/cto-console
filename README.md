@@ -94,8 +94,6 @@ cto done 1
 | Command | Description |
 |---------|-------------|
 | `cto console` | Open the TUI management console |
-| `cto console --demo` | Run demo mode |
-| `cto console --demo-fast` | Run fast demo (for recording) |
 
 ### Start Agents
 
