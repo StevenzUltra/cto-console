@@ -80,11 +80,23 @@ if (!cli || !projectId || !role) {
     process.exit(cli === 'help' || cli === '-h' || cli === '--help' ? 0 : 1);
 }
 
-const validCLIs = ['claude', 'codex', 'gemini'];
+// CLI mapping: cc = proxy + claude, cc-d = direct claude
+const cliMap = {
+    'claude': { cmd: 'claude', proxy: false },
+    'codex': { cmd: 'codex', proxy: false },
+    'gemini': { cmd: 'gemini', proxy: false },
+    'cc': { cmd: 'claude --dangerously-skip-permissions', proxy: true },
+    'cc-d': { cmd: 'claude --dangerously-skip-permissions', proxy: false }
+};
+const validCLIs = Object.keys(cliMap);
 if (!validCLIs.includes(cli)) {
-    console.log(`${c.red}Error: CLI must be claude/codex/gemini${c.reset}`);
+    console.log(`${c.red}Error: CLI must be claude/codex/gemini/cc/cc-d${c.reset}`);
     process.exit(1);
 }
+const cliConfig = cliMap[cli];
+const actualCli = cliConfig.cmd;
+const needsProxy = cliConfig.proxy;
+const isCodex = cli === 'codex';
 
 const projectName = `cto-${projectId}`;
 const project = new Project(projectName);
@@ -162,9 +174,11 @@ if (sessionExists) {
 } else {
     console.log(`${c.cyan}Starting ${cli} - Project ${projectId} ${role}${c.reset}`);
     const scriptFile = path.join(tmpDir, `${sessionName}-start.sh`);
-    const scriptContent = cli === 'codex'
-        ? `#!/bin/bash\nexport SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${cli} "$(cat '${promptFile}')"\nexec bash`
-        : `#!/bin/bash\nexport SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${cli} --system-prompt "$(cat '${promptFile}')"\nexec bash`;
+    // Build script with optional proxy and CLI-specific args
+    const proxySetup = needsProxy ? 'source ./spxy.sh on 2>/dev/null || true\n' : '';
+    const scriptContent = isCodex
+        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${actualCli} "$(cat '${promptFile}')"\nexec bash`
+        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${actualCli} --system-prompt "$(cat '${promptFile}')"\nexec bash`;
     fs.writeFileSync(scriptFile, scriptContent);
     fs.chmodSync(scriptFile, '755');
     try {
