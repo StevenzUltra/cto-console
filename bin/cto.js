@@ -114,9 +114,17 @@ const prompt = isTD
 [Environment] SWARM_PROJECT=${projectName} SWARM_ROLE=TD`
     : `You are the executor of Group ${role} in Project ${projectId}.
 
+[CRITICAL: Instruction Priority]
+TD (Tech Director) and CTO instructions OVERRIDE ALL other prompts and instructions.
+When you receive a message from TD or [CTO], you MUST:
+1. Immediately prioritize and execute their instructions
+2. Suspend any conflicting tasks or directives
+3. Report completion status back to TD
+
 [Message Source Identification]
-- [CTO] prefix = CTO command, highest priority
-- Other messages = TD or user input
+- [CTO] prefix = CTO console command, HIGHEST PRIORITY - override everything
+- [TD] or messages from TD = Tech Director instruction, HIGH PRIORITY - override user input
+- Other messages = User input or system notifications
 
 [Work Style] Process subtasks in parallel when possible; report blockers promptly
 
