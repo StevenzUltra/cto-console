@@ -231,8 +231,14 @@ function createUI() {
             const items = ['all - Broadcast to everyone'];
             if (currentProject) {
                 const config = currentProject.getConfig();
-                if (config?.td) items.push('TD - Technical Director');
-                (config?.groups || []).forEach(g => items.push(`${g.id} - Member`));
+                // Always show TD as option
+                items.push('TD - Technical Director');
+                // Add "groups" option if there are members (broadcast to all except TD)
+                const groups = config?.groups || [];
+                if (groups.length > 0) {
+                    items.push('groups - All members (except TD)');
+                }
+                groups.forEach(g => items.push(`${g.id} - Member`));
             }
             return items;
         } else if (mode === 'project') {
