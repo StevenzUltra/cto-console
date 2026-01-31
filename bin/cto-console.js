@@ -67,16 +67,31 @@ function createUI() {
     let currentProject = projects[0] ? getProject(projects[0]) : null;
     let currentTarget = 'all';
     let inputValue = '';
+    let cursorPos = 0; // Cursor position within inputValue
     let suggestionVisible = false;
     let suggestionItems = [];
     let suggestionIndex = 0;
     let suggestionMode = null;
     let ignoreNextEnter = false; // Prevent double-fire when switching modes
 
+    // Command history
+    const commandHistory = [];
+    let historyIndex = -1;
+    let savedInput = ''; // Save current input when navigating history
+    const MAX_HISTORY = 100;
+
     const screen = blessed.screen({
         smartCSR: true,
         title: 'CTO Console',
-        fullUnicode: true
+        fullUnicode: true,
+        forceUnicode: true,
+        // Try to help with IME cursor positioning
+        cursor: {
+            artificial: true,
+            shape: 'line',
+            blink: true,
+            color: 'green'
+        }
     });
 
     // Green gradient ASCII title
@@ -141,14 +156,18 @@ function createUI() {
         statusBar.setContent(` {white-fg}${currentProject.name}{/white-fg} | Tasks ${completed}/${tasks.length} | ${members.join(' ')} | Send: ${target}`);
     }
 
-    // Input box (bottom)
+    // Input box (bottom) - dynamic height for multiline
+    const MIN_INPUT_HEIGHT = 3;
+    const MAX_INPUT_HEIGHT = 10;
+    let currentInputHeight = MIN_INPUT_HEIGHT;
+
     const inputBox = blessed.box({
         parent: screen,
         label: ` Message → @${currentTarget} `,
         bottom: 4,
         left: 0,
         width: '100%',
-        height: 3,
+        height: MIN_INPUT_HEIGHT,
         border: { type: 'line', fg: 'green' },
         style: { fg: 'white', bg: 'black', border: { fg: 'green' } },
         tags: true
@@ -172,7 +191,34 @@ function createUI() {
 
     function updateInput() {
         inputBox.setLabel(` Message → @${currentTarget} `);
-        inputBox.setContent(` ${inputValue}{green-fg}_{/green-fg}`);
+
+        // Build display with cursor
+        const before = inputValue.slice(0, cursorPos);
+        const after = inputValue.slice(cursorPos);
+        const cursorChar = after.length > 0 ? after[0] : ' ';
+        const rest = after.slice(1);
+
+        // Show cursor as inverted char
+        inputBox.setContent(` ${before}{green-bg}{black-fg}${cursorChar}{/black-fg}{/green-bg}${rest}`);
+
+        // Calculate needed height based on content lines
+        const lines = inputValue.split('\n');
+        const termWidth = screen.width - 4; // Account for borders
+        let totalLines = 0;
+        lines.forEach(line => {
+            totalLines += Math.max(1, Math.ceil((line.length + 1) / termWidth));
+        });
+
+        const neededHeight = Math.min(MAX_INPUT_HEIGHT, Math.max(MIN_INPUT_HEIGHT, totalLines + 2));
+
+        if (neededHeight !== currentInputHeight) {
+            currentInputHeight = neededHeight;
+            inputBox.height = neededHeight;
+            inputBox.bottom = 4;
+            // Adjust log box bottom margin
+            logBox.bottom = neededHeight + 5;
+            statusBar.bottom = neededHeight + 4;
+        }
     }
 
     function updateSuggestions() {
@@ -323,10 +369,16 @@ function createUI() {
             case 'help':
             case 'h':
                 addLog('{green-fg}=== Help ==={/green-fg}');
-                addLog('  Type @ to select target');
-                addLog('  Type / for commands');
-                addLog('  @TD message - Send to TD');
-                addLog('  Ctrl+C/Esc - Exit');
+                addLog('  {yellow-fg}Input:{/yellow-fg}');
+                addLog('    @ - Select target   / - Commands');
+                addLog('    Shift+Enter - New line');
+                addLog('    ↑/↓ - History navigation');
+                addLog('  {yellow-fg}Shortcuts:{/yellow-fg}');
+                addLog('    Ctrl+A/E - Start/End of line');
+                addLog('    Ctrl+K/U - Delete after/before cursor');
+                addLog('    Ctrl+W - Delete word   Ctrl+L - Clear');
+                addLog('    ←/→ - Move cursor   Home/End - Jump');
+                addLog('  {yellow-fg}Exit:{/yellow-fg} Ctrl+C or Esc');
                 break;
             case 'p':
             case 'project':
@@ -374,6 +426,7 @@ function createUI() {
     function submitInput() {
         const input = inputValue.trim();
         inputValue = '';
+        cursorPos = 0;
         updateInput();
 
         if (!input) return;
@@ -435,6 +488,7 @@ function createUI() {
                         addLog(`{gray-fg}Target: @${currentTarget}{/gray-fg}`);
                         updateStatus();
                         inputValue = '';
+                        cursorPos = 0;
                         hideSuggestions();
                     } else if (suggestionMode === 'project') {
                         // Select project
@@ -443,12 +497,14 @@ function createUI() {
                         addLog(`{green-fg}Switched to: ${selected}{/green-fg}`);
                         updateStatus();
                         inputValue = '';
+                        cursorPos = 0;
                         hideSuggestions();
                     } else if (suggestionMode === '/') {
                         if (selected === 'p') {
                             // Switch to project selection mode
                             ignoreNextEnter = true; // Prevent double-fire
                             inputValue = '/p ';
+                            cursorPos = inputValue.length;
                             showSuggestions('project');
                             updateInput();
                             screen.render();
@@ -456,17 +512,20 @@ function createUI() {
                         } else {
                             handleCommand(selected);
                             inputValue = '';
+                            cursorPos = 0;
                             hideSuggestions();
                         }
                     }
                 } else {
                     inputValue = '';
+                    cursorPos = 0;
                     hideSuggestions();
                 }
                 updateInput();
             } else if (key.name === 'escape') {
                 // Esc in suggestion mode just closes suggestions
                 inputValue = '';
+                cursorPos = 0;
                 hideSuggestions();
                 updateInput();
             } else if (key.name === 'backspace') {
@@ -488,12 +547,14 @@ function createUI() {
                     updateInput();
                 } else {
                     inputValue = '';
+                    cursorPos = 0;
                     hideSuggestions();
                     updateInput();
                 }
             } else if (ch && !key.ctrl && !key.meta) {
-                // Type character to filter
+                // Type character to filter (always append at end in suggestion mode)
                 inputValue += ch;
+                cursorPos = inputValue.length;
 
                 // Detect switch to project mode /p or /p followed by chars
                 if (suggestionMode === '/' && inputValue.startsWith('/p')) {
@@ -520,13 +581,160 @@ function createUI() {
             exitApp();
             return;
         }
-        if (key.name === 'enter' || key.name === 'return') {
-            submitInput();
-        } else if (key.name === 'backspace') {
-            inputValue = inputValue.slice(0, -1);
+
+        // Shift+Enter = newline
+        if ((key.name === 'enter' || key.name === 'return') && key.shift) {
+            inputValue = inputValue.slice(0, cursorPos) + '\n' + inputValue.slice(cursorPos);
+            cursorPos++;
             updateInput();
-        } else if (ch && !key.ctrl && !key.meta) {
-            inputValue += ch;
+            screen.render();
+            return;
+        }
+
+        // Enter = submit
+        if (key.name === 'enter' || key.name === 'return') {
+            // Save to history before submitting
+            if (inputValue.trim()) {
+                commandHistory.unshift(inputValue);
+                if (commandHistory.length > MAX_HISTORY) commandHistory.pop();
+            }
+            historyIndex = -1;
+            savedInput = '';
+            submitInput();
+            cursorPos = 0;
+            screen.render();
+            return;
+        }
+
+        // History navigation (Up/Down without suggestions)
+        if (key.name === 'up' && commandHistory.length > 0) {
+            if (historyIndex === -1) savedInput = inputValue;
+            if (historyIndex < commandHistory.length - 1) {
+                historyIndex++;
+                inputValue = commandHistory[historyIndex];
+                cursorPos = inputValue.length;
+                updateInput();
+            }
+            screen.render();
+            return;
+        }
+        if (key.name === 'down') {
+            if (historyIndex > 0) {
+                historyIndex--;
+                inputValue = commandHistory[historyIndex];
+                cursorPos = inputValue.length;
+            } else if (historyIndex === 0) {
+                historyIndex = -1;
+                inputValue = savedInput;
+                cursorPos = inputValue.length;
+            }
+            updateInput();
+            screen.render();
+            return;
+        }
+
+        // Terminal shortcuts
+        // Ctrl+A = beginning of line
+        if (key.ctrl && key.name === 'a') {
+            cursorPos = 0;
+            updateInput();
+            screen.render();
+            return;
+        }
+        // Ctrl+E = end of line
+        if (key.ctrl && key.name === 'e') {
+            cursorPos = inputValue.length;
+            updateInput();
+            screen.render();
+            return;
+        }
+        // Ctrl+K = delete from cursor to end
+        if (key.ctrl && key.name === 'k') {
+            inputValue = inputValue.slice(0, cursorPos);
+            updateInput();
+            screen.render();
+            return;
+        }
+        // Ctrl+U = delete from cursor to beginning
+        if (key.ctrl && key.name === 'u') {
+            inputValue = inputValue.slice(cursorPos);
+            cursorPos = 0;
+            updateInput();
+            screen.render();
+            return;
+        }
+        // Ctrl+W = delete word before cursor
+        if (key.ctrl && key.name === 'w') {
+            const before = inputValue.slice(0, cursorPos);
+            const after = inputValue.slice(cursorPos);
+            const trimmed = before.replace(/\S+\s*$/, '');
+            inputValue = trimmed + after;
+            cursorPos = trimmed.length;
+            updateInput();
+            screen.render();
+            return;
+        }
+        // Ctrl+L = clear screen (logs)
+        if (key.ctrl && key.name === 'l') {
+            logBox.setContent('');
+            addLog('{gray-fg}Screen cleared{/gray-fg}');
+            screen.render();
+            return;
+        }
+
+        // Arrow keys for cursor movement
+        if (key.name === 'left') {
+            if (cursorPos > 0) cursorPos--;
+            updateInput();
+            screen.render();
+            return;
+        }
+        if (key.name === 'right') {
+            if (cursorPos < inputValue.length) cursorPos++;
+            updateInput();
+            screen.render();
+            return;
+        }
+
+        // Home/End keys
+        if (key.name === 'home') {
+            cursorPos = 0;
+            updateInput();
+            screen.render();
+            return;
+        }
+        if (key.name === 'end') {
+            cursorPos = inputValue.length;
+            updateInput();
+            screen.render();
+            return;
+        }
+
+        // Backspace
+        if (key.name === 'backspace') {
+            if (cursorPos > 0) {
+                inputValue = inputValue.slice(0, cursorPos - 1) + inputValue.slice(cursorPos);
+                cursorPos--;
+            }
+            updateInput();
+            screen.render();
+            return;
+        }
+
+        // Delete key
+        if (key.name === 'delete') {
+            if (cursorPos < inputValue.length) {
+                inputValue = inputValue.slice(0, cursorPos) + inputValue.slice(cursorPos + 1);
+            }
+            updateInput();
+            screen.render();
+            return;
+        }
+
+        // Regular character input
+        if (ch && !key.ctrl && !key.meta) {
+            inputValue = inputValue.slice(0, cursorPos) + ch + inputValue.slice(cursorPos);
+            cursorPos++;
             updateInput();
             // Auto-show suggestions
             if (inputValue === '@') showSuggestions('@');
@@ -536,10 +744,49 @@ function createUI() {
         screen.render();
     });
 
+    // ═══════════════════════════════════════════════════════════════
+    // @CTO Notification System
+    // ═══════════════════════════════════════════════════════════════
+    let flashCount = 0;
+    let flashInterval = null;
+    const originalHeaderBg = 'black';
+
+    function notifyCTO(from, message) {
+        // 1. Sound alert (terminal bell)
+        process.stdout.write('\x07');
+
+        // 2. Visual flash effect on header
+        if (flashInterval) clearInterval(flashInterval);
+        flashCount = 0;
+        flashInterval = setInterval(() => {
+            flashCount++;
+            if (flashCount % 2 === 0) {
+                header.style.bg = originalHeaderBg;
+            } else {
+                header.style.bg = 'red';
+            }
+            screen.render();
+            if (flashCount >= 6) {
+                clearInterval(flashInterval);
+                flashInterval = null;
+                header.style.bg = originalHeaderBg;
+                screen.render();
+            }
+        }, 200);
+
+        // 3. Log with highlight
+        addLog(`{red-bg}{white-fg} @CTO {/white-fg}{/red-bg} {yellow-fg}[${from}]{/yellow-fg} ${message}`);
+        screen.render();
+    }
+
     // Log watcher
     let lastLogSizes = {};
+    let lastCtoInboxSize = 0;
+
     function watchLogs() {
         if (!currentProject || !fs.existsSync(currentProject.logsDir)) return;
+
+        // Watch regular logs
         fs.readdirSync(currentProject.logsDir).filter(f => f.endsWith('.log')).forEach(file => {
             const logPath = path.join(currentProject.logsDir, file);
             const groupId = file.replace('.log', '');
@@ -549,19 +796,45 @@ function createUI() {
                 if (stat.size > lastSize) {
                     const content = fs.readFileSync(logPath, 'utf-8');
                     content.slice(lastSize).split('\n').filter(Boolean).forEach(line => {
-                        addLog(`{cyan-fg}[${groupId}]{/cyan-fg} ${line}`);
+                        // Check for @CTO mention in log
+                        if (line.includes('@CTO') || line.includes('@cto')) {
+                            notifyCTO(groupId, line.replace(/@CTO|@cto/gi, '').trim());
+                        } else {
+                            addLog(`{cyan-fg}[${groupId}]{/cyan-fg} ${line}`);
+                        }
                     });
                     lastLogSizes[logPath] = stat.size;
                 }
             } catch {}
         });
+
+        // Watch CTO inbox file (for direct messages from agents)
+        const ctoInboxPath = path.join(currentProject.dir, 'cto-inbox.jsonl');
+        try {
+            if (fs.existsSync(ctoInboxPath)) {
+                const stat = fs.statSync(ctoInboxPath);
+                if (stat.size > lastCtoInboxSize) {
+                    const content = fs.readFileSync(ctoInboxPath, 'utf-8');
+                    const newContent = content.slice(lastCtoInboxSize);
+                    newContent.split('\n').filter(Boolean).forEach(line => {
+                        try {
+                            const msg = JSON.parse(line);
+                            notifyCTO(msg.from || 'Agent', msg.message || msg.content || line);
+                        } catch {
+                            notifyCTO('Agent', line);
+                        }
+                    });
+                    lastCtoInboxSize = stat.size;
+                }
+            }
+        } catch {}
     }
 
-    setInterval(() => { updateStatus(); watchLogs(); screen.render(); }, 2000);
+    setInterval(() => { updateStatus(); watchLogs(); screen.render(); }, 1000); // Faster polling for @CTO
 
     // Startup
     addLog('{green-fg}CTO Console started{/green-fg}');
-    addLog('{gray-fg}Type @ for target, / for commands, Esc to exit{/gray-fg}');
+    addLog('{gray-fg}@ target | / commands | Shift+Enter newline | ↑↓ history | /help for more{/gray-fg}');
     if (currentProject) addLog(`{gray-fg}Project: ${currentProject.name}{/gray-fg}`);
 
     // Demo mode - simulate agent reports
