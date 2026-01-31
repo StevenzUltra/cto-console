@@ -1,11 +1,14 @@
 {
   "name": "cto-console",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "CTO Console - Multi AI Agent Collaboration Tool, manage Claude/Codex/Gemini teams via tmux",
   "main": "lib/project.js",
   "bin": {
     "cto": "./bin/cto.js",
     "at-cto": "./bin/at-cto.js"
+  },
+  "overrides": {
+    "xml2js": "^0.6.2"
   },
   "dependencies": {
     "blessed": "^0.1.81",
