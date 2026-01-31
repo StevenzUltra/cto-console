@@ -80,24 +80,11 @@ if (!cli || !projectId || !role) {
     process.exit(cli === 'help' || cli === '-h' || cli === '--help' ? 0 : 1);
 }
 
-// CLI mapping: cc = proxy + claude, cc-d = direct claude
-const cliMap = {
-    'claude': { base: 'claude', flags: '', proxy: false },
-    'codex': { base: 'codex', flags: '', proxy: false },
-    'gemini': { base: 'gemini', flags: '', proxy: false },
-    'cc': { base: 'claude', flags: '--dangerously-skip-permissions', proxy: true },
-    'cc-d': { base: 'claude', flags: '--dangerously-skip-permissions', proxy: false }
-};
-const validCLIs = Object.keys(cliMap);
+const validCLIs = ['claude', 'codex', 'gemini'];
 if (!validCLIs.includes(cli)) {
-    console.log(`${c.red}Error: CLI must be claude/codex/gemini/cc/cc-d${c.reset}`);
+    console.log(`${c.red}Error: CLI must be claude/codex/gemini${c.reset}`);
     process.exit(1);
 }
-const cliConfig = cliMap[cli];
-const baseCli = cliConfig.base;
-const cliFlags = cliConfig.flags;
-const needsProxy = cliConfig.proxy;
-const isCodex = cli === 'codex';
 
 const projectName = `cto-${projectId}`;
 const project = new Project(projectName);
@@ -175,56 +162,26 @@ if (sessionExists) {
     const scriptFile = path.join(tmpDir, `${sessionName}-start.sh`);
     const promptFile = path.join(tmpDir, `${sessionName}-prompt.txt`);
 
-    // Build script: proxy setup -> start CLI
-    const proxySetup = needsProxy ? 'source ./spxy.sh on 2>/dev/null || true\n' : '';
-    const flagsSuffix = cliFlags ? ` ${cliFlags}` : '';
+    // Write prompt to file for safe multi-line handling
+    fs.writeFileSync(promptFile, prompt);
 
-    // Escape prompt for shell (escape single quotes)
-    const escapedPrompt = prompt.replace(/'/g, "'\\''");
-
-    // Different scripts for Codex vs Claude
-    let scriptContent;
-    if (isCodex) {
-        // Codex: pass prompt from file to handle multi-line content safely
-        scriptContent = `#!/bin/bash
+    // Different scripts for Codex vs Claude/Gemini
+    const scriptContent = cli === 'codex'
+        ? `#!/bin/bash
 export SWARM_PROJECT="${projectName}"
 export SWARM_ROLE="${role}"
-
-# Read prompt from file (handles multi-line safely)
-PROMPT=\$(cat "${promptFile}")
+${cli} "$(cat '${promptFile}')"
 rm -f "${promptFile}"
-
-${baseCli} "\$PROMPT"
-exec bash`;
-    } else {
-        // Claude/cc/cc-d: use send-keys to inject prompt after CLI starts
-        scriptContent = `#!/bin/bash
-# 1. Set environment variables first
-export CLAUDE_CODE_TASK_LIST_ID="${projectName}"
+exec bash`
+        : `#!/bin/bash
 export SWARM_PROJECT="${projectName}"
 export SWARM_ROLE="${role}"
-
-# 2. Setup proxy (if needed)
-${proxySetup}
-# 3. Background injector: wait for CLI, then send prompt
-(
-    sleep 6
-    if [ -f "${promptFile}" ]; then
-        tmux send-keys -t "${sessionName}" "$(cat '${promptFile}')"
-        sleep 1
-        tmux send-keys -t "${sessionName}" Enter
-        rm -f "${promptFile}"
-    fi
-) &
-
-# 4. Start CLI in foreground
-${baseCli}${flagsSuffix}
+${cli} --system-prompt "$(cat '${promptFile}')"
+rm -f "${promptFile}"
 exec bash`;
-    }
 
     fs.writeFileSync(scriptFile, scriptContent);
     fs.chmodSync(scriptFile, '755');
-    fs.writeFileSync(promptFile, prompt);
 
     try {
         execSync(`tmux new-session -d -s "${sessionName}" "bash '${scriptFile}'"`);
