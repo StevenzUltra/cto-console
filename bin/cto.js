@@ -153,8 +153,6 @@ const tmpDir = os.tmpdir();
 const safeProjectId = String(projectId).replace(/[^a-zA-Z0-9]/g, '');
 const safeRole = String(role).replace(/[^a-zA-Z0-9]/g, '');
 const sessionName = `cto-${safeProjectId}-${safeRole}`;
-const promptFile = path.join(tmpDir, `${sessionName}-prompt.txt`);
-fs.writeFileSync(promptFile, prompt);
 
 // Register to project
 if (role === 'TD') {
@@ -178,9 +176,11 @@ if (sessionExists) {
     // Build script with optional proxy and CLI-specific args
     const proxySetup = needsProxy ? 'source ./spxy.sh on 2>/dev/null || true\n' : '';
     const flagsSuffix = cliFlags ? ` ${cliFlags}` : '';
+    // Escape prompt for bash heredoc (escape backslashes and single quotes)
+    const escapedPrompt = prompt.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
     const scriptContent = isCodex
-        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} "$(cat '${promptFile}')"${flagsSuffix}\nexec bash`
-        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} --system-prompt "$(cat '${promptFile}')"${flagsSuffix}\nexec bash`;
+        ? `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} '${escapedPrompt}'${flagsSuffix}\nexec bash`
+        : `#!/bin/bash\n${proxySetup}export SWARM_PROJECT="${projectName}"\nexport SWARM_ROLE="${role}"\n${baseCli} --system-prompt '${escapedPrompt}'${flagsSuffix}\nexec bash`;
     fs.writeFileSync(scriptFile, scriptContent);
     fs.chmodSync(scriptFile, '755');
     try {
@@ -191,5 +191,3 @@ if (sessionExists) {
         process.exit(1);
     }
 }
-
-try { fs.unlinkSync(promptFile); } catch {}
