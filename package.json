@@ -1,0 +1,19 @@
+{
+  "name": "cto-console",
+  "version": "3.0.0",
+  "description": "CTO Console - Multi AI Agent Collaboration Tool, manage Claude/Codex/Gemini teams via tmux",
+  "main": "lib/project.js",
+  "bin": {
+    "cto": "./bin/cto.js"
+  },
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0"
+  },
+  "scripts": {
+    "test": "node bin/swarm-cli.js help"
+  },
+  "keywords": ["ai", "agent", "swarm", "claude", "codex", "gemini", "tmux", "collaboration", "tui"],
+  "author": "EagerStudy",
+  "license": "MIT"
+}
